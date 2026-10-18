@@ -1,4 +1,4 @@
-FROM ubuntu:latest
+FROM ubuntu:16.04
 
 LABEL version="5.1.4"
 LABEL maintainer="Florian Schaper <fschaper@intux.org>"
