@@ -1,0 +1,13 @@
+# Données locales de la base PALO
+palo-data/
+palo-data/*
+
+# Fichiers Python temporaires
+__pycache__/
+*.pyc
+
+# Mac OS
+.DS_Store
+
+# Build
+build/
