@@ -6,7 +6,7 @@ import urllib.parse
 import json
 import hashlib
 
-PALO_URL = "http://127.0.0.1:7777"
+PALO_URL = __import__("os").environ.get("PALO_URL", "http://127.0.0.1:7777")
 PORT = 8080
 
 def get_palo_session():
@@ -115,6 +115,54 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": True, "res": res}).encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
+            return
+
+        # --- Creation : base / dimension / cube ---
+        elif parsed.path in ("/api/db/create", "/api/dim/create", "/api/cube/create"):
+            try:
+                sid = get_palo_session()
+                q = lambda v: urllib.parse.quote(str(v).strip(), safe="")
+                name = data.get("name", "").strip()
+                if not name:
+                    raise ValueError("name is required")
+                db = str(data.get("database", "")).strip()
+
+                if parsed.path == "/api/db/create":
+                    res = urllib.request.urlopen(
+                        f"{PALO_URL}/database/create?sid={sid}&new_name={q(name)}").read().decode().strip()
+                    new_id = res.split(";")[0]
+                    urllib.request.urlopen(f"{PALO_URL}/database/save?sid={sid}&database={new_id}").read()
+
+                elif parsed.path == "/api/dim/create":
+                    if not db:
+                        raise ValueError("database is required")
+                    res = urllib.request.urlopen(
+                        f"{PALO_URL}/dimension/create?sid={sid}&database={db}&new_name={q(name)}").read().decode().strip()
+                    new_id = res.split(";")[0]
+                    urllib.request.urlopen(f"{PALO_URL}/database/save?sid={sid}&database={db}").read()
+
+                else:  # /api/cube/create
+                    if not db:
+                        raise ValueError("database is required")
+                    dims = data.get("dimensions") or []
+                    dims = [str(d).strip() for d in dims if str(d).strip()]
+                    if not dims:
+                        raise ValueError("at least one dimension is required")
+                    res = urllib.request.urlopen(
+                        f"{PALO_URL}/cube/create?sid={sid}&database={db}&new_name={q(name)}&dimensions={','.join(dims)}"
+                    ).read().decode().strip()
+                    new_id = res.split(";")[0]
+                    urllib.request.urlopen(f"{PALO_URL}/database/save?sid={sid}&database={db}").read()
+
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True, "id": new_id, "res": res}).encode('utf-8'))
             except Exception as e:
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json")
@@ -254,278 +302,172 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PALO MOLAP Studio - Splashing</title>
+    <title>Qonso Molap Studio - Splashing</title>
     <style>
         :root {
-            --bg: #090d16;
-            --card: #131c2e;
-            --border: #23324d;
-            --text: #f8fafc;
-            --muted: #94a3b8;
-            --primary: #38bdf8;
-            --accent: #10b981;
-            --danger: #ef4444;
-            --purple: #a855f7;
+            --bg: #090d16; --panel: #131c2e; --ink: #f8fafc; --muted: #94a3b8;
+            --line: #23324d; --violet: #a855f7; --violet-bg: #3b0764; --violet-ink: #e9d5ff;
+            --primary: #38bdf8; --ok: #34d399;
         }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * { box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            padding: 24px;
+            margin: 0; background: var(--bg); color: var(--ink); font-size: 15px; line-height: 1.5;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            padding: 0 0 40px;
         }
-        .container { max-width: 1100px; margin: 0 auto; }
+        .container { max-width: 1060px; margin: 0 auto; padding: 34px 20px 64px; }
         header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 24px;
-            padding-bottom: 16px;
-            border-bottom: 1px solid var(--border);
+            display: flex; justify-content: space-between; align-items: flex-end; gap: 16px;
+            padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 20px;
         }
-        h1 { font-size: 22px; font-weight: 700; color: var(--primary); }
-        .badge {
-            background: #064e3b;
-            color: #34d399;
-            padding: 5px 12px;
-            border-radius: 9999px;
-            font-size: 13px;
-            font-weight: 600;
-        }
-        .controls {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 24px;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-        select, input[type="text"] {
-            background: var(--card);
-            color: var(--text);
-            border: 1px solid var(--border);
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 14px;
-            outline: none;
-        }
+        h1 { font-size: 22px; margin: 0; font-weight: 700; letter-spacing: -0.01em; color: var(--primary); }
+        h2 { font-size: 15px; margin: 0 0 4px; font-weight: 700; color: var(--ink); }
+        .meta { color: var(--muted); font-size: 13px; }
         .card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            margin-bottom: 24px;
+            background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: 18px; margin-bottom: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.35);
         }
-        h2 { font-size: 18px; margin-bottom: 8px; color: var(--text); }
-        .meta { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
-        
-        /* Table MOLAP */
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-            border-radius: 8px;
-            overflow: hidden;
+        .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+        select, input[type=text] {
+            font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--line);
+            border-radius: 8px; background: #0b1322; color: var(--ink);
         }
-        th, td {
-            padding: 12px 18px;
-            text-align: right;
-            border: 1px solid var(--border);
-            font-size: 14px;
-        }
-        th {
-            background: #1e293b;
-            color: var(--primary);
-            font-weight: 600;
-        }
-        th:first-child, td:first-child {
-            text-align: left;
-            font-weight: 600;
-            color: #e2e8f0;
-            background: #172554;
-        }
-        td {
-            background: #0b1322;
-            font-variant-numeric: tabular-nums;
-        }
-        td.editable {
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        td.editable:hover {
-            background: #1d2c47;
-            outline: 2px solid var(--primary);
-        }
-        /* Style spécial pour les cellules consolidées (Splashing) */
-        td.consolidated {
-            background: #2e1065 !important;
-            color: #d8b4fe !important;
-            font-weight: 700;
-        }
-        td.consolidated:hover {
-            outline: 2px solid var(--purple) !important;
-            background: #3b0764 !important;
-        }
-        tr.consolidated-row td:first-child {
-            background: #3b0764 !important;
-            color: #f3e8ff !important;
-            font-weight: 800;
-        }
-        td input {
-            width: 100%;
-            background: #020617;
-            border: 1px solid var(--primary);
-            color: #fff;
-            padding: 6px 8px;
-            text-align: right;
-            border-radius: 4px;
-            font-size: 14px;
-            outline: none;
-        }
-        .total { font-weight: 700; color: #a7f3d0; background: #064e3b !important; }
-        
-        /* Dimensions Section */
-        .dim-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 16px;
-            margin-top: 10px;
-        }
-        .dim-card {
-            background: #0b1322;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 16px;
-        }
-        .dim-title {
-            font-size: 15px;
-            font-weight: 700;
-            color: var(--primary);
-            margin-bottom: 12px;
-            display: flex;
-            justify-content: space-between;
-        }
-        .elem-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-bottom: 16px;
-        }
-        .elem-chip {
-            background: #1e293b;
-            border: 1px solid var(--border);
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 13px;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .elem-chip.consolidated-chip {
-            background: #3b0764;
-            border-color: #7e22ce;
-            color: #e9d5ff;
-            font-weight: 600;
-        }
-        .elem-chip .del-btn {
-            cursor: pointer;
-            color: #94a3b8;
-            font-size: 14px;
-            font-weight: bold;
-        }
-        .elem-chip .del-btn:hover { color: var(--danger); }
-        .add-form {
-            display: flex;
-            gap: 8px;
-        }
+        select:focus, input[type=text]:focus { outline: 2px solid rgba(56,189,248,0.45); outline-offset: 1px; }
         .btn {
-            background: var(--primary);
-            color: #0f172a;
-            border: none;
-            padding: 8px 14px;
-            border-radius: 6px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: 0.2s;
-            white-space: nowrap;
+            font: inherit; font-size: 14px; padding: 7px 14px; border: none;
+            background: var(--primary); color: #0f172a; border-radius: 8px; cursor: pointer; font-weight: 600;
         }
         .btn:hover { opacity: 0.9; }
-        .legend {
-            display: flex;
-            gap: 16px;
-            align-items: center;
-            font-size: 13px;
-            color: var(--muted);
-            margin-bottom: 16px;
-            padding: 10px 14px;
-            background: #0b1322;
-            border-radius: 8px;
-            border: 1px solid var(--border);
+        .badge {
+            font-size: 12px; color: var(--ok); background: #064e3b; border: 1px solid #065f46;
+            border-radius: 999px; padding: 3px 10px; white-space: nowrap;
         }
-        .legend-box {
-            width: 14px;
-            height: 14px;
-            border-radius: 4px;
-            display: inline-block;
-            vertical-align: middle;
-            margin-right: 6px;
+        details.card summary { cursor: pointer; font-weight: 600; font-size: 15px; color: var(--ink); }
+        table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14px; }
+        th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+        th {
+            font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
+        th:first-child, td:first-child { text-align: left; }
+        tbody tr:hover { background: #0f1829; }
+        .editable { cursor: pointer; }
+        .editable:hover { background: #1d2c47; }
+        .consolidated, .consolidated-row td { background: var(--violet-bg); color: var(--violet-ink); font-weight: 700; }
+        .consolidated:hover { background: #4c1d95 !important; }
+        .dim-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; margin-top: 14px; }
+        .dim-card { background: #0b1322; border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+        .dim-title { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; font-size: 14px; margin-bottom: 10px; color: var(--primary); }
+        .elem-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 26px; }
+        .elem-chip {
+            font-size: 13px; background: #1e293b; border: 1px solid var(--line); border-radius: 999px;
+            padding: 3px 10px; display: inline-flex; align-items: center; gap: 6px;
+        }
+        .consolidated-chip { background: var(--violet-bg); border-color: #7e22ce; color: var(--violet-ink); font-weight: 600; }
+        .del-btn { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 700; }
+        .del-btn:hover { color: #ef4444; }
+        .add-form { display: flex; gap: 8px; margin-top: 10px; }
         #toast {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            background: #10b981;
-            color: #022c22;
-            font-weight: 600;
-            padding: 10px 18px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-            display: none;
-            z-index: 1000;
+            display: none; position: fixed; right: 24px; bottom: 24px;
+            background: #10b981; color: #022c22; font-weight: 600;
+            padding: 10px 18px; border-radius: 8px;
+            font-size: 14px; z-index: 50; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
         }
+        .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+        .legend-box { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
             <div>
-                <h1>PALO MOLAP Studio</h1>
-                <div class="meta" style="margin: 0;">Gestion des Cubes & Moteur de Splashing</div>
+                <h1>Qonso Molap Studio</h1>
+                <div class="meta">Edit any cell &middot; consolidated totals spill down to their children</div>
             </div>
-            <div style="display: flex; gap: 12px; align-items: center;">
-                <span class="badge">● Connecté (Port 7777)</span>
-                <button class="btn" onclick="loadData()">Actualiser</button>
-            </div>
+            <span class="badge">&#9679; Connected</span>
         </header>
 
         <div class="controls">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <label style="color: var(--muted); font-size: 14px;">Base de données :</label>
-                <select id="dbSelect" onchange="loadData(this.value)"></select>
+            <label class="meta" for="dbSelect">Database</label>
+            <select id="dbSelect" onchange="loadData(this.value)"></select>
+            <button class="btn" onclick="loadData(currentDbId)">Refresh</button>
+        </div>
+
+        <details class="card">
+            <summary>Setup &mdash; create a database, a dimension or a cube</summary>
+            <div style="display: grid; gap: 12px; margin-top: 14px;">
+                <div class="add-form" style="margin: 0;">
+                    <input type="text" id="newDbName" placeholder="New database name..." style="flex: 1;"
+                           onkeydown="if(event.key==='Enter') createDatabase()">
+                    <button class="btn" onclick="createDatabase()">Create database</button>
+                </div>
+                <div class="add-form" style="margin: 0;">
+                    <input type="text" id="newDimName" placeholder="New dimension name..." style="flex: 1;"
+                           onkeydown="if(event.key==='Enter') createDimension()">
+                    <button class="btn" onclick="createDimension()">Add dimension</button>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <input type="text" id="newCubeName" placeholder="New cube name..." style="flex: 1; min-width: 200px;"
+                           onkeydown="if(event.key==='Enter') createCube()">
+                    <div id="dimPick" style="display: flex; gap: 14px; flex-wrap: wrap;"></div>
+                    <button class="btn" onclick="createCube()">Create cube</button>
+                </div>
             </div>
-        </div>
+        </details>
 
-        <div class="legend">
-            <span><span class="legend-box" style="background: #0b1322; border: 1px solid var(--border);"></span> Cellule de base (édition simple)</span>
-            <span><span class="legend-box" style="background: #3b0764; border: 1px solid var(--purple);"></span> <b>Cellule Consolidée (SPLASHING)</b> : modifiez pour ventiler proportionnellement sur les enfants</span>
-        </div>
+        <div id="cubeContent" class="meta">Loading...</div>
 
-        <!-- Section Cube -->
-        <div id="cubeContent">Chargement du cube...</div>
-
-        <!-- Section Dimensions & Éléments -->
         <div class="card">
-            <h2>Gestion des Dimensions & Éléments</h2>
-            <div class="meta">Les éléments en violet sont <b>consolidés</b> (regroupements hiérarchiques).</div>
+            <h2>Dimensions</h2>
+            <div class="meta">Purple elements are consolidated roll-ups. Add a new element with the field below each dimension.</div>
             <div id="dimContent" class="dim-container"></div>
         </div>
     </div>
 
-    <div id="toast">Opération réussie !</div>
+    <div id="toast">Operation succeeded!</div>
 
     <script>
         let currentDbId = null;
+
+        async function postJSON(url, body) {
+            try {
+                const res = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+                return await res.json();
+            } catch (e) {
+                return {success: false, error: e.message};
+            }
+        }
+
+        async function createDatabase() {
+            const el = document.getElementById('newDbName');
+            const name = el.value.trim();
+            if (!name) return alert('Enter a database name.');
+            const r = await postJSON('/api/db/create', {name: name});
+            if (r.success) { el.value = ''; showToast(`Database "${name}" created`); loadData(r.id); }
+            else alert('Error: ' + r.error);
+        }
+
+        async function createDimension() {
+            const el = document.getElementById('newDimName');
+            const name = el.value.trim();
+            if (!name) return alert('Enter a dimension name.');
+            if (!currentDbId) return alert('Create or select a database first.');
+            const r = await postJSON('/api/dim/create', {database: currentDbId, name: name});
+            if (r.success) { el.value = ''; showToast(`Dimension "${name}" created`); loadData(currentDbId); }
+            else alert('Error: ' + r.error);
+        }
+
+        async function createCube() {
+            const el = document.getElementById('newCubeName');
+            const name = el.value.trim();
+            if (!name) return alert('Enter a cube name.');
+            if (!currentDbId) return alert('Create or select a database first.');
+            const dims = Array.from(document.querySelectorAll('#dimPick input:checked')).map(i => i.value);
+            if (!dims.length) return alert('Tick at least one dimension.');
+            const r = await postJSON('/api/cube/create', {database: currentDbId, name: name, dimensions: dims});
+            if (r.success) { el.value = ''; showToast(`Cube "${name}" created`); loadData(currentDbId); }
+            else alert('Error: ' + r.error);
+        }
 
         function showToast(msg) {
             const toast = document.getElementById('toast');
@@ -567,17 +509,17 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                     const r = await res.json();
                     if (r.success) {
                         if (isConsolidated) {
-                            showToast(`🌊 Splashing effectué : ${newVal.toLocaleString('fr-FR')} € ventilés sur les enfants !`);
+                            showToast(`🌊 Splashing applied: ${newVal.toLocaleString('en-US')} € spread across children!`);
                         } else {
-                            showToast(`Cellule mise à jour : ${newVal.toLocaleString('fr-FR')} €`);
+                            showToast(`Cell updated: ${newVal.toLocaleString('en-US')} €`);
                         }
                         loadData(currentDbId);
                     } else {
-                        alert('Erreur: ' + r.error);
+                        alert('Error: ' + r.error);
                         td.textContent = oldVal.toLocaleString('fr-FR', {minimumFractionDigits: 1}) + ' €';
                     }
                 } catch(e) {
-                    alert('Erreur réseau: ' + e.message);
+                    alert('Network error: ' + e.message);
                     td.textContent = oldVal.toLocaleString('fr-FR', {minimumFractionDigits: 1}) + ' €';
                 }
             }
@@ -605,19 +547,19 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                 });
                 const r = await res.json();
                 if (r.success) {
-                    showToast(`Élément "${name}" ajouté avec succès`);
+                    showToast(`Element "${name}" added successfully`);
                     input.value = '';
                     loadData(currentDbId);
                 } else {
-                    alert('Erreur: ' + r.error);
+                    alert('Error: ' + r.error);
                 }
             } catch(e) {
-                alert('Erreur réseau: ' + e.message);
+                alert('Network error: ' + e.message);
             }
         }
 
         async function deleteElement(dimId, elemId, name) {
-            if (!confirm(`Supprimer l'élément "${name}" de cette dimension ?`)) return;
+            if (!confirm(`Delete element "${name}" from this dimension?`)) return;
 
             try {
                 const res = await fetch('/api/element/delete', {
@@ -627,13 +569,13 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                 });
                 const r = await res.json();
                 if (r.success) {
-                    showToast(`Élément "${name}" supprimé`);
+                    showToast(`Element "${name}" deleted`);
                     loadData(currentDbId);
                 } else {
-                    alert('Erreur: ' + r.error);
+                    alert('Error: ' + r.error);
                 }
             } catch(e) {
-                alert('Erreur réseau: ' + e.message);
+                alert('Network error: ' + e.message);
             }
         }
 
@@ -646,7 +588,7 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                 const data = await res.json();
                 
                 if (data.error) {
-                    cubeContainer.innerHTML = `<div class="card" style="color: #f87171;">Erreur: ${data.error}</div>`;
+                    cubeContainer.innerHTML = `<div class="card" style="color: #f87171;">Error: ${data.error}</div>`;
                     return;
                 }
 
@@ -671,28 +613,36 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                         <div class="dim-card">
                             <div class="dim-title">
                                 <span>📁 ${d.name}</span>
-                                <span style="font-size: 12px; color: var(--muted);">${d.elements.length} éléments</span>
+                                <span style="font-size: 12px; color: var(--muted);">${d.elements.length} elements</span>
                             </div>
                             <div class="elem-list">
                                 ${d.elements.map(e => `
                                     <span class="elem-chip ${e.type === 4 ? 'consolidated-chip' : ''}">
                                         ${e.type === 4 ? '∑ ' : ''}${e.name}
-                                        <span class="del-btn" onclick="deleteElement('${d.id}', '${e.id}', '${e.name}')" title="Supprimer">&times;</span>
+                                        <span class="del-btn" onclick="deleteElement('${d.id}', '${e.id}', '${e.name}')" title="Delete">&times;</span>
                                     </span>
                                 `).join('')}
                             </div>
                             <div class="add-form">
-                                <input type="text" id="${inputId}" placeholder="Nouvel élément..." onkeydown="if(event.key==='Enter') addElement('${d.id}', '${inputId}')" style="width: 100%;">
+                                <input type="text" id="${inputId}" placeholder="New element..." onkeydown="if(event.key==='Enter') addElement('${d.id}', '${inputId}')" style="width: 100%;">
                                 <button class="btn" onclick="addElement('${d.id}', '${inputId}')">+</button>
                             </div>
                         </div>
                     `;
                 });
-                dimContainer.innerHTML = dimHtml || '<div style="color: var(--muted);">Aucune dimension personnalisée.</div>';
+                dimContainer.innerHTML = dimHtml || '<div style="color: var(--muted);">No custom dimensions yet.</div>';
+
+                // Choix des dimensions pour la creation de cube
+                const pick = document.getElementById('dimPick');
+                if (pick) {
+                    pick.innerHTML = data.all_dimensions.length
+                        ? data.all_dimensions.map(d => `<label style="font-size: 14px;"><input type="checkbox" value="${d.id}"> ${d.name}</label>`).join('')
+                        : '<span style="color: var(--muted); font-size: 13px;">No dimension yet - create one below.</span>';
+                }
 
                 // Rendu des Cubes
                 if (!data.cubes || data.cubes.length === 0) {
-                    cubeContainer.innerHTML = `<div class="card">Aucun cube présent dans cette base.</div>`;
+                    cubeContainer.innerHTML = `<div class="card">No cubes in this database.</div>`;
                     return;
                 }
 
@@ -701,33 +651,46 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                     const dims = cube.dimensions;
                     cubeHtml += `
                         <div class="card">
-                            <h2>Cube : ${cube.name}</h2>
-                            <div class="meta">Dimensions : <b>${dims.map(d => d.name).join(' × ')}</b></div>
+                            <h2>Cube: ${cube.name}</h2>
+                            <div class="meta">Dimensions: <b>${dims.map(d => d.name).join(' × ')}</b></div>
                     `;
 
                     if (dims.length === 2) {
                         const rowDim = dims[0];
                         const colDim = dims[1];
                         
-                        cubeHtml += `<table><thead><tr><th>${rowDim.name} \\ ${colDim.name}</th>`;
+                        cubeHtml += `<div class="filters" style="display:flex;gap:18px;flex-wrap:wrap;margin:14px 0;align-items:center">
+                            <label style="font-size:13px;color:var(--muted)">Filter rows:
+                                <select class="f-row" style="margin-left:6px">
+                                    <option value="__all">All</option>${rowDim.elements.map(e => `<option value="${e.name}">${e.type === 4 ? '∑ ' : ''}${e.name}</option>`).join('')}
+                                </select>
+                            </label>
+                            <label style="font-size:13px;color:var(--muted)">Filter columns:
+                                <select class="f-col" style="margin-left:6px">
+                                    <option value="__all">All</option>${colDim.elements.map(e => `<option value="${e.name}">${e.type === 4 ? '∑ ' : ''}${e.name}</option>`).join('')}
+                                </select>
+                            </label>
+                            <span class="meta">Tip: edit a ∑ total cell to test splashing</span>
+                        </div>`;
+                        cubeHtml += `<table data-cube="${cube.id}"><thead><tr><th>${rowDim.name} \\ ${colDim.name}</th>`;
                         colDim.elements.forEach(c => {
-                            cubeHtml += `<th>${c.type === 4 ? '∑ ' : ''}${c.name}</th>`;
+                            cubeHtml += `<th data-col="${c.name}">${c.type === 4 ? '∑ ' : ''}${c.name}</th>`;
                         });
                         cubeHtml += `</tr></thead><tbody>`;
 
                         rowDim.elements.forEach(r => {
                             const isConsolRow = (r.type === 4);
-                            cubeHtml += `<tr class="${isConsolRow ? 'consolidated-row' : ''}"><td>${isConsolRow ? '∑ ' : ''}${r.name}</td>`;
+                            cubeHtml += `<tr data-row="${r.name}" class="${isConsolRow ? 'consolidated-row' : ''}"><td>${isConsolRow ? '∑ ' : ''}${r.name}</td>`;
                             colDim.elements.forEach(c => {
                                 const cellObj = cube.matrix[r.name]?.[c.name] || {value: 0, path: `${r.id},${c.id}`, is_consolidated: false};
                                 const val = cellObj.value;
                                 const path = cellObj.path;
                                 const isConsolidated = cellObj.is_consolidated;
                                 const numVal = typeof val === 'number' ? val : 0;
-                                const displayVal = typeof val === 'number' ? val.toLocaleString('fr-FR', {minimumFractionDigits: 1, maximumFractionDigits: 1}) + ' €' : val;
+                                const displayVal = typeof val === 'number' ? val.toLocaleString('en-US', {minimumFractionDigits: 1, maximumFractionDigits: 1}) + ' €' : val;
                                 
-                                cubeHtml += `<td class="editable ${isConsolidated ? 'consolidated' : ''}" 
-                                                title="${isConsolidated ? 'Cellule consolidée : le changement appliquera un Splashing' : 'Cellule de base'}"
+                                cubeHtml += `<td data-col="${c.name}" class="editable ${isConsolidated ? 'consolidated' : ''}" 
+                                                title="${isConsolidated ? 'Consolidated cell: the change will apply splashing' : 'Base cell'}"
                                                 onclick="editCell(this, '${data.selected_db.id}', '${cube.id}', '${path}', ${numVal}, ${isConsolidated})">${displayVal}</td>`;
                             });
                             cubeHtml += `</tr>`;
@@ -739,8 +702,26 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                 });
 
                 cubeContainer.innerHTML = cubeHtml;
+
+                // Filtres lignes / colonnes (slicing de la vue)
+                cubeContainer.querySelectorAll('table[data-cube]').forEach(tbl => {
+                    const card = tbl.closest('.card');
+                    const rowSel = card.querySelector('.f-row');
+                    const colSel = card.querySelector('.f-col');
+                    const apply = () => {
+                        const r = rowSel.value, c = colSel.value;
+                        tbl.querySelectorAll('tbody tr').forEach(tr => {
+                            tr.style.display = (r === '__all' || tr.dataset.row === r) ? '' : 'none';
+                        });
+                        tbl.querySelectorAll('[data-col]').forEach(el => {
+                            el.style.display = (c === '__all' || el.dataset.col === c) ? '' : 'none';
+                        });
+                    };
+                    rowSel.addEventListener('change', apply);
+                    colSel.addEventListener('change', apply);
+                });
             } catch (err) {
-                cubeContainer.innerHTML = `<div class="card" style="color: #f87171;">Erreur de connexion: ${err.message}</div>`;
+                cubeContainer.innerHTML = `<div class="card" style="color: #f87171;">Connection error: ${err.message}</div>`;
             }
         }
         loadData();
@@ -754,5 +735,5 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     with socketserver.TCPServer(("", PORT), PaloViewerHandler) as httpd:
-        print(f"Serveur Web Studio Palo avec Splashing démarré sur http://localhost:{PORT}")
+        print(f"Palo Web Studio (Splashing) running at http://localhost:{PORT}")
         httpd.serve_forever()
