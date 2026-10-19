@@ -672,7 +672,7 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                             </label>
                             <span class="meta">Tip: edit a ∑ total cell to test splashing</span>
                         </div>`;
-                        cubeHtml += `<table data-cube="${cube.id}"><thead><tr><th>${rowDim.name} \\ ${colDim.name}</th>`;
+                        cubeHtml += `<table data-cube="${cube.id}"><thead><tr><th>${rowDim.name} × ${colDim.name}</th>`;
                         colDim.elements.forEach(c => {
                             cubeHtml += `<th data-col="${c.name}">${c.type === 4 ? '∑ ' : ''}${c.name}</th>`;
                         });
@@ -687,7 +687,10 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                                 const path = cellObj.path;
                                 const isConsolidated = cellObj.is_consolidated;
                                 const numVal = typeof val === 'number' ? val : 0;
-                                const displayVal = typeof val === 'number' ? val.toLocaleString('en-US', {minimumFractionDigits: 1, maximumFractionDigits: 1}) + ' €' : val;
+                                const displayVal = typeof val === 'number'
+                                    ? val.toLocaleString('en-US', {minimumFractionDigits: 1, maximumFractionDigits: 1}) + ' €'
+                                    : (val === '' || val === null || val === undefined
+                                        ? '<span style="color:var(--muted)">0.0 €</span>' : val);
                                 
                                 cubeHtml += `<td data-col="${c.name}" class="editable ${isConsolidated ? 'consolidated' : ''}" 
                                                 title="${isConsolidated ? 'Consolidated cell: the change will apply splashing' : 'Base cell'}"
@@ -697,6 +700,11 @@ class PaloViewerHandler(http.server.SimpleHTTPRequestHandler):
                         });
 
                         cubeHtml += `</tbody></table>`;
+                    } else {
+                        cubeHtml += `<div class="meta" style="margin-top:10px;color:#fbbf24">
+                            This cube has ${dims.length} dimensions: <b>${dims.map(d => d.name).join(' × ')}</b>.
+                            The grid is displayed for cubes with exactly <b>two</b> dimensions — create a cube on two
+                            dimensions to enter data here.</div>`;
                     }
                     cubeHtml += `</div>`;
                 });
